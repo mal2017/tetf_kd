@@ -1,0 +1,68 @@
+import sys
+import peppy
+import glob
+from snakemake.utils import min_version
+min_version("6.0")
+
+
+configfile: "config/config.yaml"
+pepfile: "config/pep.yaml"
+
+SAMPLES = [x.sample_name for x in pep.samples]
+
+#SUBSAMPLE_TABLE = pep.subsample_table
+
+rule all:
+    input:
+        "results/quantification/vanilla_salmon_tes_transcripts/se.gene.0.rds",
+        "results/fastqc/"
+
+module quant:
+    snakefile: github("mal2017/tetf_expression_quant",path="workflow/Snakefile",commit="0108f107a1cfa53a60a8fd12d9c0d3c9490abf3c")
+    config: config
+
+use rule * from quant as quant_*
+
+ruleorder: concat_local_pe_runs > quant_concat_pe_runs > quant_concat_runs > quant_fasterq_dump
+
+rule concat_local_pe_runs:
+    """
+    We concatenated single-end fastqs from the same SRX accession (same library).
+    """
+    input:
+        fqs1 = lambda wc: pep.get_sample(wc.sample).path_r1,
+        fqs2 = lambda wc: pep.get_sample(wc.sample).path_r2,
+    output:
+        r1=temp("results/reads/concat/{sample}_r1.fastq"),
+        r2=temp("results/reads/concat/{sample}_r2.fastq")
+    threads:
+        1
+    resources:
+        time=60,
+        mem=20000,
+        cpus=1
+    priority: 2
+    shell:
+        """
+        zcat {input.fqs1} > {output.r1} &&
+        zcat {input.fqs2} > {output.r2}
+        """
+
+rule fastqc:
+    input:
+        [pep.get_sample(x).path_r1 for x in SAMPLES] + [pep.get_sample(x).path_r2 for x in SAMPLES]
+    output:
+        directory("results/fastqc/")
+    resources:
+        time=60,
+        mem=24000,
+        cpus=24
+    threads:
+        24
+    singularity: "docker://quay.io/biocontainers/fastqc:0.11.9--hdfd78af_1"
+    shell:
+        """
+        mkdir -p {output} &&
+
+        fastqc -t {threads} -o {output} {input}
+        """
